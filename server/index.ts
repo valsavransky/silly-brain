@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -152,6 +153,200 @@ app.post("/api/twenty-questions", async (req, res) => {
     res.json({ ...parsed, questionNumber: questionsAsked + 1 });
   } catch (err) {
     console.error("twenty-questions error:", err);
+    res.status(502).json({ error: "The genie got distracted! Please try again." });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Reverse 20 Questions: the genie holds the secret, the child asks questions.
+// Secrets stay server-side in short-lived in-memory sessions (nothing personal
+// is stored — just a game id and a word like "penguin").
+// ---------------------------------------------------------------------------
+const SECRETS = [
+  "a dog", "a cat", "an elephant", "a giraffe", "a penguin", "a butterfly",
+  "a dolphin", "an octopus", "a turtle", "a ladybug", "a horse", "a bunny",
+  "a banana", "a pizza", "an ice cream cone", "an apple", "a carrot",
+  "a cookie", "a watermelon", "a sandwich", "popcorn",
+  "a toothbrush", "an umbrella", "a bicycle", "a soccer ball", "a teddy bear",
+  "a school bus", "a fire truck", "a guitar", "a drum", "a kite", "a balloon",
+  "a robot", "a crayon", "a backpack", "a snowman", "a sandcastle",
+  "the moon", "a rainbow", "a cloud", "a sunflower", "a train",
+];
+
+const STARTER_QUESTIONS = [
+  "Is it alive?",
+  "Is it an animal?",
+  "Can you eat it?",
+  "Is it bigger than a backpack?",
+  "Would you find it inside a house?",
+  "Can you hold it in one hand?",
+];
+
+interface ReverseGame {
+  secret: string;
+  createdAt: number;
+}
+const reverseGames = new Map<string, ReverseGame>();
+const REVERSE_TTL_MS = 2 * 60 * 60 * 1000;
+
+function cleanupReverseGames() {
+  const now = Date.now();
+  for (const [id, game] of reverseGames) {
+    if (now - game.createdAt > REVERSE_TTL_MS) reverseGames.delete(id);
+  }
+  if (reverseGames.size > 5000) reverseGames.clear();
+}
+
+const REVERSE_SCHEMA = {
+  type: "object",
+  properties: {
+    answer: {
+      type: "string",
+      enum: ["yes", "no", "sort of", "ask me something else"],
+      description:
+        "Truthful answer about the secret. Use 'ask me something else' only when the child's message is off-topic, inappropriate, or not answerable with yes/no.",
+    },
+    isCorrectGuess: {
+      type: "boolean",
+      description: "True when the child's message names the secret or clearly means it.",
+    },
+    reply: {
+      type: "string",
+      description:
+        "One short cheerful sentence (under 15 words) delivering the answer with personality. Never reveal the secret unless isCorrectGuess is true.",
+    },
+    suggestedQuestions: {
+      type: "array",
+      items: { type: "string" },
+      description:
+        "Exactly 6 NEW short yes/no questions the child could ask next — smart detective questions that build on everything answered so far. Never repeat an earlier question. If things are narrowed down, make one of them a specific guess like 'Is it a penguin?'.",
+    },
+  },
+  required: ["answer", "isCorrectGuess", "reply", "suggestedQuestions"],
+  additionalProperties: false,
+} as const;
+
+function reverseSystemPrompt(secret: string): string {
+  return `You are the playful "Guessing Genie" in MindSprout 20 Questions, a game for children ages 6-12. This time the roles are flipped: YOU are hiding a secret and the child is the detective asking yes/no questions.
+
+The secret is: ${secret}.
+
+Rules:
+- Answer every question truthfully about the secret with "yes", "no", or "sort of".
+- If the child's message names the secret (or clearly means it — like "puppy" for a dog), set isCorrectGuess to true and celebrate big in your reply.
+- Your reply is ONE short, cheerful sentence a 7-year-old understands. Add fun flair, but NEVER reveal or hint at the secret's name unless isCorrectGuess is true.
+- If the message is not a yes/no question about the secret, or is inappropriate, set answer to "ask me something else" and gently steer back to the game.
+- suggestedQuestions: exactly 6 new, simple yes/no questions that would help the child narrow it down, based on everything answered so far. Never repeat questions already asked. When the child is close, include one specific guess.
+- Keep everything wholesome. Never ask for personal information.`;
+}
+
+app.post("/api/twenty-questions/reverse/start", (req, res) => {
+  const ip = req.ip ?? "unknown";
+  if (rateLimited(ip)) {
+    res.status(429).json({ error: "Whoa, slow down a little! Try again in a minute." });
+    return;
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    res.status(503).json({ error: "The guessing genie is asleep (AI is not configured on this server)." });
+    return;
+  }
+  cleanupReverseGames();
+  const gameId = crypto.randomUUID();
+  const secret = SECRETS[Math.floor(Math.random() * SECRETS.length)];
+  reverseGames.set(gameId, { secret, createdAt: Date.now() });
+  res.json({ gameId, suggestedQuestions: STARTER_QUESTIONS });
+});
+
+app.post("/api/twenty-questions/reverse/ask", async (req, res) => {
+  const ip = req.ip ?? "unknown";
+  if (rateLimited(ip)) {
+    res.status(429).json({ error: "Whoa, slow down a little! Try again in a minute." });
+    return;
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    res.status(503).json({ error: "The guessing genie is asleep (AI is not configured on this server)." });
+    return;
+  }
+
+  const { gameId, question } = req.body ?? {};
+  const history: { question: string; reply: string }[] = Array.isArray(req.body?.history)
+    ? req.body.history
+    : [];
+  if (
+    typeof gameId !== "string" ||
+    typeof question !== "string" ||
+    question.trim().length === 0 ||
+    question.length > 200 ||
+    history.length > 25 ||
+    !history.every(
+      (h) =>
+        typeof h?.question === "string" &&
+        h.question.length < 500 &&
+        typeof h?.reply === "string" &&
+        h.reply.length < 500,
+    )
+  ) {
+    res.status(400).json({ error: "Invalid game move." });
+    return;
+  }
+
+  const game = reverseGames.get(gameId);
+  if (!game) {
+    res.status(404).json({ error: "That game has ended — start a new one!" });
+    return;
+  }
+
+  const messages: Anthropic.MessageParam[] = [];
+  for (const entry of history) {
+    messages.push({ role: "user", content: entry.question });
+    messages.push({ role: "assistant", content: entry.reply });
+  }
+  messages.push({
+    role: "user",
+    content: `${question.trim()}\n(The child has used ${history.length} of 20 questions so far.)`,
+  });
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-5",
+      max_tokens: 1024,
+      thinking: { type: "adaptive" },
+      output_config: {
+        effort: "low",
+        format: { type: "json_schema", schema: REVERSE_SCHEMA },
+      },
+      system: reverseSystemPrompt(game.secret),
+      messages,
+    });
+
+    const text = response.content.find((b) => b.type === "text");
+    if (!text || text.type !== "text") {
+      res.status(502).json({ error: "The genie mumbled something we couldn't hear. Try again!" });
+      return;
+    }
+    const parsed = JSON.parse(text.text) as {
+      answer: string;
+      isCorrectGuess: boolean;
+      reply: string;
+      suggestedQuestions: string[];
+    };
+
+    // Off-topic redirects don't count against the 20 questions
+    const counted = parsed.answer !== "ask me something else";
+    const questionNumber = history.length + (counted ? 1 : 0);
+    const lost = counted && !parsed.isCorrectGuess && questionNumber >= 20;
+
+    if (parsed.isCorrectGuess || lost) reverseGames.delete(gameId);
+
+    res.json({
+      ...parsed,
+      suggestedQuestions: (parsed.suggestedQuestions ?? []).slice(0, 6),
+      counted,
+      questionNumber,
+      ...(lost ? { revealedSecret: game.secret } : {}),
+    });
+  } catch (err) {
+    console.error("reverse twenty-questions error:", err);
     res.status(502).json({ error: "The genie got distracted! Please try again." });
   }
 });
