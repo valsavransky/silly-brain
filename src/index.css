@@ -1,0 +1,60 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Baloo 2", system-ui, sans-serif;
+  --font-body: "Nunito", system-ui, sans-serif;
+
+  --color-sprout-50: #f0fdf5;
+  --color-sprout-100: #dcfce8;
+  --color-sprout-400: #4ade80;
+  --color-sprout-500: #22c55e;
+  --color-sprout-600: #16a34a;
+  --color-sprout-700: #15803d;
+
+  --color-berry-400: #c084fc;
+  --color-berry-500: #a855f7;
+  --color-berry-600: #9333ea;
+
+  --color-sunny-300: #fde047;
+  --color-sunny-400: #facc15;
+  --color-sunny-500: #eab308;
+
+  --color-splash-400: #38bdf8;
+  --color-splash-500: #0ea5e9;
+  --color-splash-600: #0284c7;
+
+  --color-coral-400: #fb7185;
+  --color-coral-500: #f43f5e;
+
+  --color-ink: #1e293b;
+  --color-paper: #fffbf2;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  -webkit-tap-highlight-color: transparent;
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--font-display);
+}
+
+/* Chunky, kid-friendly button feel: raised with a pressed state */
+.btn-chunky {
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+  transform: translateY(0);
+}
+.btn-chunky:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 0 rgb(0 0 0 / 0.25) !important;
+}
+
+@keyframes float-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+.animate-bob {
+  animation: float-bob 3s ease-in-out infinite;
+}
