@@ -128,7 +128,7 @@ app.post("/api/twenty-questions", async (req, res) => {
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-opus-4-8",
+      model: "claude-sonnet-5",
       max_tokens: 1024,
       thinking: { type: "adaptive" },
       output_config: {

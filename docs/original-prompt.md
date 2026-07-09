@@ -79,5 +79,5 @@ The build expanded beyond the single-file prototype the master prompt asked for:
 
 - **All four games fully playable** (not just a Pattern Arcade mini-prototype)
 - **Stack upgraded** from single-file HTML/vanilla JS to Vite + React + TypeScript + Tailwind v4 + Phaser 3 + Framer Motion, served by an Express server
-- **Real AI backend** for 20 Questions via the Claude API (`claude-opus-4-8`, structured outputs), key held server-side
+- **Real AI backend** for 20 Questions via the Claude API (`claude-sonnet-5`, structured outputs), key held server-side — Sonnet 5 chosen over Opus for near-equal questioning quality at lower cost and latency
 - **Deploy target:** Railway, single service (`railway.json`); requires the `ANTHROPIC_API_KEY` env var
